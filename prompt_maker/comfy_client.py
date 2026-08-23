@@ -33,16 +33,22 @@ class ComfyUIClient:
         except Exception as exc:
             return False, f"无法连接 ComfyUI：{exc}"
 
-    def load_workflow(self) -> dict[str, Any]:
-        path = Path(self.settings.comfy_workflow)
+    def _load_workflow_file(self, workflow_path: str) -> dict[str, Any]:
+        path = Path(workflow_path)
         if not path.is_absolute():
             path = Path.cwd() / path
         try:
             workflow = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise ComfyUIError(f"无法读取 ComfyUI API 工作流 {path}：{exc}") from exc
-        if not isinstance(workflow, dict) or "395" not in workflow:
-            raise ComfyUIError("工作流不是预期的 API 格式，或缺少 LoadImage 节点 395。")
+        if not isinstance(workflow, dict):
+            raise ComfyUIError(f"工作流不是预期的 ComfyUI API 格式：{path}")
+        return workflow
+
+    def load_workflow(self) -> dict[str, Any]:
+        workflow = self._load_workflow_file(self.settings.comfy_workflow)
+        if "395" not in workflow:
+            raise ComfyUIError("视频工作流缺少 LoadImage 节点 395。")
         return workflow
 
     def upload_image(self, image_path: str | Path) -> str:
@@ -91,31 +97,13 @@ class ComfyUIClient:
 
     @staticmethod
     def compose_positive_prompt(result: DirectorResult) -> str:
-        """Combine the overall direction with every shot's temporal instructions."""
-        final_prompt = result.final_prompt_en.strip()
-        constraints = [item.strip() for item in result.continuity_constraints if item.strip()]
-        shot_sections: list[str] = []
-        for shot in result.shots:
-            shot_prompt = shot.prompt_en.strip()
-            if not shot_prompt or shot_prompt in final_prompt:
-                continue
-            shot_sections.append(
-                f"Shot {shot.number} ({shot.duration_seconds:g} seconds): {shot_prompt}"
-            )
-        sections = [final_prompt]
-        if constraints:
-            sections.append(
-                "Strict visual identity and continuity constraints:\n- "
-                + "\n- ".join(constraints)
-            )
-        if shot_sections:
-            sections.append(
-                "Temporal shot plan. Preserve every identity, appearance, anatomy, "
-                "material, marking, costume, prop, environment, lighting, and spatial "
-                "continuity constraint throughout:\n"
-                + "\n".join(shot_sections)
-            )
-        return "\n\n".join(sections)
+        """Return the model-ready flowing prompt produced by the director.
+
+        LTX-2.5 expects chronological prose, especially for native multi-shot scenes.
+        The structured shot list and constraints remain UI/debug data and must not be
+        appended as a numbered checklist that duplicates or contradicts that prose.
+        """
+        return result.final_prompt_en.strip()
 
     def queue(self, workflow: dict[str, Any]) -> str:
         try:
@@ -134,7 +122,9 @@ class ComfyUIClient:
             raise ComfyUIError(f"ComfyUI 未返回任务 ID：{payload}")
         return prompt_id
 
-    def wait_for_output(self, prompt_id: str) -> dict[str, str]:
+    def wait_for_output(
+        self, prompt_id: str, preferred_node: str = "75"
+    ) -> dict[str, str]:
         deadline = time.monotonic() + self.settings.comfy_timeout
         while time.monotonic() < deadline:
             try:
@@ -149,8 +139,8 @@ class ComfyUIClient:
                     messages = status.get("messages", [])
                     raise ComfyUIError(f"ComfyUI 生成失败：{messages}")
                 outputs = history.get("outputs", {})
-                # 优先读取工作流的 SaveVideo 节点，避免误取预览图等中间产物。
-                output = self._find_file(outputs.get("75", outputs))
+                # 优先读取调用方指定的最终保存节点，避免误取预览等中间产物。
+                output = self._find_file(outputs.get(preferred_node, outputs))
                 if output:
                     return output
             time.sleep(2)
@@ -180,7 +170,7 @@ class ComfyUIClient:
             response = httpx.get(self._url("view"), params=output, timeout=300)
             response.raise_for_status()
         except httpx.HTTPError as exc:
-            raise ComfyUIError(f"下载 ComfyUI 视频失败：{exc}") from exc
+            raise ComfyUIError(f"下载 ComfyUI 生成结果失败：{exc}") from exc
         suffix = Path(output["filename"]).suffix or ".mp4"
         destination = Path.cwd() / "outputs" / "comfyui" / f"{prompt_id}{suffix}"
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -194,3 +184,31 @@ class ComfyUIClient:
         )
         output = self.wait_for_output(prompt_id)
         return prompt_id, self.download_output(output, prompt_id)
+
+    def prepare_image_workflow(
+        self, prompt: str, *, width: int, height: int
+    ) -> dict[str, Any]:
+        workflow = copy.deepcopy(
+            self._load_workflow_file(self.settings.comfy_image_workflow)
+        )
+        required = ("9", "57:27", "57:13", "57:3")
+        missing = [node_id for node_id in required if node_id not in workflow]
+        if missing:
+            raise ComfyUIError(f"图片工作流缺少必要节点：{', '.join(missing)}")
+        workflow["57:27"]["inputs"]["text"] = prompt
+        workflow["57:13"]["inputs"]["width"] = width
+        workflow["57:13"]["inputs"]["height"] = height
+        workflow["57:3"]["inputs"]["seed"] = int.from_bytes(
+            uuid.uuid4().bytes[:8], "big"
+        ) & ((1 << 63) - 1)
+        return workflow
+
+    def generate_image(
+        self, prompt: str, *, width: int, height: int
+    ) -> tuple[str, Path]:
+        prompt_id = self.queue(
+            self.prepare_image_workflow(prompt, width=width, height=height)
+        )
+        output = self.wait_for_output(prompt_id, preferred_node="9")
+        path = self.download_output(output, prompt_id)
+        return prompt_id, path

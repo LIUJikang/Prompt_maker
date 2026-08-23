@@ -15,6 +15,13 @@ from .workflow import PromptDirector, legal_frame_count
 director = PromptDirector(settings)
 comfy = ComfyUIClient(settings)
 
+IMAGE_SIZES = {
+    "16:9": (1344, 768),
+    "9:16": (768, 1344),
+    "1:1": (1024, 1024),
+    "2.39:1": (1536, 640),
+}
+
 BUSY_OVERLAY_HTML = """
 <div class="busy-card" role="status" aria-live="assertive">
   <div class="busy-spinner" aria-hidden="true"></div>
@@ -158,6 +165,50 @@ def analyze_and_question(
     )
 
 
+def generate_first_frame(
+    state: dict[str, Any] | None,
+    instruction: str,
+    current_prompt: str,
+    aspect_ratio: str,
+):
+    instruction = instruction.strip()
+    current_prompt = current_prompt.strip()
+    if not instruction and not current_prompt:
+        raise gr.Error("请先填写图片创意，或直接填写英文生成提示词。")
+    try:
+        summary = "使用手动编辑后的提示词。"
+        prompt = current_prompt
+        if instruction:
+            designed = director.design_image_prompt(
+                instruction,
+                previous_prompt=current_prompt,
+                aspect_ratio=aspect_ratio,
+            )
+            prompt = designed.prompt_en.strip()
+            summary = designed.change_summary_zh
+        width, height = IMAGE_SIZES[aspect_ratio]
+        prompt_id, image_path = comfy.generate_image(
+            prompt,
+            width=width,
+            height=height,
+        )
+    except OllamaError as exc:
+        raise gr.Error(str(exc)) from exc
+    except ComfyUIError as exc:
+        raise gr.Error(str(exc)) from exc
+
+    next_state = dict(state or {})
+    next_state["generated_image_prompt"] = prompt
+    next_state["generated_image_path"] = str(image_path)
+    return (
+        next_state,
+        str(image_path),
+        prompt,
+        "",
+        f"生成完成：{summary}  ComfyUI 任务 ID：`{prompt_id}`",
+    )
+
+
 def generate_prompt(
     state: dict[str, Any] | None,
     answers: str,
@@ -278,6 +329,16 @@ def show_comfy_busy():
     )
 
 
+def show_image_busy():
+    return gr.HTML(
+        value=BUSY_OVERLAY_HTML.format(
+            title="正在生成首帧图片",
+            message="正在整理本轮修改要求，并等待 Z-Image Turbo 完成图片……",
+        ),
+        visible=True,
+    )
+
+
 def hide_busy():
     return gr.HTML(visible=False)
 
@@ -299,6 +360,8 @@ def reset_to_initial():
         None,
         None,
         "",
+        "",
+        "",
         6,
         24,
         "16:9",
@@ -312,6 +375,7 @@ def reset_to_initial():
         "",
         "",
         None,
+        "",
         "",
         gr.Column(visible=True),
         gr.Column(visible=False),
@@ -342,6 +406,23 @@ def build_app() -> gr.Blocks:
                         lines=8,
                         placeholder="例如：雨夜街道中的女人向前走，最后回头看向镜头……",
                     )
+            with gr.Accordion("没有首帧？用 Z-Image Turbo 生成", open=False):
+                gr.Markdown(
+                    "描述你想要的首帧并生成。之后可继续填写修改要求反复生成；"
+                    "也可以直接编辑英文提示词后再次生成。当前结果会自动填入上方首帧图片。"
+                )
+                image_instruction = gr.Textbox(
+                    label="图片创意 / 本轮修改要求",
+                    lines=4,
+                    placeholder="首次示例：雨夜东京街头，一位穿红色风衣的女人……\n"
+                    "修改示例：保留人物和场景，把镜头改成更低的机位。",
+                )
+                image_generation_prompt = gr.Textbox(
+                    label="实际发送给图片模型的英文提示词（可编辑）",
+                    lines=7,
+                )
+                generate_image_button = gr.Button("生成首帧 / 按要求再次生成")
+                image_generation_status = gr.Markdown()
             with gr.Accordion("高级生成设置（可选）", open=False):
                 gr.Markdown("不确定时保留默认值即可，导演 Agent 会据此规划镜头。")
                 with gr.Row():
@@ -403,6 +484,24 @@ def build_app() -> gr.Blocks:
         fps.change(frame_preview, [duration, fps], frame_info)
         status_button.click(check_ollama, outputs=status)
         comfy_status_button.click(check_comfy, outputs=comfy_connection)
+        image_started = generate_image_button.click(
+            show_image_busy,
+            outputs=busy_overlay,
+            show_progress="hidden",
+        )
+        image_finished = image_started.then(
+            generate_first_frame,
+            [state, image_instruction, image_generation_prompt, aspect_ratio],
+            [
+                state,
+                image,
+                image_generation_prompt,
+                image_instruction,
+                image_generation_status,
+            ],
+            show_progress="hidden",
+        )
+        image_finished.then(hide_busy, outputs=busy_overlay, show_progress="hidden")
         analysis_started = analyze_button.click(
             show_analysis_busy,
             outputs=busy_overlay,
@@ -463,6 +562,8 @@ def build_app() -> gr.Blocks:
                 state,
                 image,
                 description,
+                image_instruction,
+                image_generation_prompt,
                 duration,
                 fps,
                 aspect_ratio,
@@ -477,6 +578,7 @@ def build_app() -> gr.Blocks:
                 result_json,
                 comfy_video,
                 comfy_status,
+                image_generation_status,
                 setup_panel,
                 question_panel,
                 result_panel,

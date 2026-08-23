@@ -9,6 +9,27 @@ from prompt_maker.schemas import DirectorResult
 
 
 class ComfyWorkflowTests(unittest.TestCase):
+    def test_prepare_image_workflow_injects_prompt_size_and_new_seed(self):
+        source = Path("image_z_image_turbo.json")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workflow_path = Path(temp_dir) / "image_workflow.json"
+            workflow_path.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+            client = ComfyUIClient(
+                Settings(comfy_image_workflow=str(workflow_path))
+            )
+
+            workflow = client.prepare_image_workflow(
+                "A cinematic first frame", width=1344, height=768
+            )
+
+        self.assertEqual(
+            workflow["57:27"]["inputs"]["text"], "A cinematic first frame"
+        )
+        self.assertEqual(workflow["57:13"]["inputs"]["width"], 1344)
+        self.assertEqual(workflow["57:13"]["inputs"]["height"], 768)
+        self.assertIsInstance(workflow["57:3"]["inputs"]["seed"], int)
+        json.dumps(workflow)
+
     def test_prepare_workflow_injects_director_outputs(self):
         source = Path("video_ltx2_5_i2v.json")
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -49,11 +70,8 @@ class ComfyWorkflowTests(unittest.TestCase):
 
         self.assertEqual(workflow["395"]["inputs"]["image"], "uploaded.png")
         positive = workflow["398:376"]["inputs"]["value"]
-        self.assertIn("positive prompt", positive)
-        self.assertIn("Shot 1 (6.375 seconds)", positive)
-        self.assertIn("camera slowly pushes", positive)
-        self.assertIn("Strict visual identity", positive)
-        self.assertIn("facial geometry and eye color", positive)
+        self.assertEqual(positive, "positive prompt")
+        self.assertNotIn("Shot 1", positive)
         self.assertEqual(workflow["398:373"]["inputs"]["text"], "negative prompt")
         self.assertEqual(workflow["398:361"]["inputs"]["value"], 24)
         self.assertEqual(workflow["398:378"]["inputs"]["expression"], "153")

@@ -40,6 +40,11 @@ class ImageAnalysis(BaseModel):
     uncertainties: list[str] = Field(default_factory=list)
 
 
+class ImagePromptResult(BaseModel):
+    prompt_en: str
+    change_summary_zh: str = ""
+
+
 class ClarificationQuestion(BaseModel):
     id: str
     question: str

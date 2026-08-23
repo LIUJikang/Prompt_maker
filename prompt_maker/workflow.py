@@ -6,8 +6,8 @@ from pathlib import Path
 
 from .config import Settings
 from .ollama_client import OllamaClient
-from .prompts import CLARIFICATION, DIRECTOR, IMAGE_ANALYSIS
-from .schemas import ClarificationPlan, DirectorResult, ImageAnalysis
+from .prompts import CLARIFICATION, DIRECTOR, IMAGE_ANALYSIS, IMAGE_PROMPT_ENGINEER
+from .schemas import ClarificationPlan, DirectorResult, ImageAnalysis, ImagePromptResult
 
 
 def legal_frame_count(duration_seconds: float, fps: int) -> int:
@@ -30,6 +30,25 @@ class PromptDirector:
             schema=ImageAnalysis,
             image_path=image_path,
             temperature=0.1,
+        )
+
+    def design_image_prompt(
+        self,
+        instruction: str,
+        *,
+        previous_prompt: str = "",
+        aspect_ratio: str = "16:9",
+    ) -> ImagePromptResult:
+        context = {
+            "user_instruction": instruction,
+            "previous_prompt": previous_prompt,
+            "aspect_ratio": aspect_ratio,
+        }
+        return self.client.structured_chat(
+            system=IMAGE_PROMPT_ENGINEER,
+            user=json.dumps(context, ensure_ascii=False),
+            schema=ImagePromptResult,
+            temperature=0.35,
         )
 
     def plan_questions(

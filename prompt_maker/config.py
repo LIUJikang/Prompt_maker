@@ -12,6 +12,9 @@ class Settings:
     max_questions: int = int(os.getenv("MAX_CLARIFYING_QUESTIONS", "3"))
     comfy_url: str = os.getenv("COMFYUI_URL", "http://127.0.0.1:8000")
     comfy_workflow: str = os.getenv("COMFYUI_WORKFLOW", "video_ltx2_5_i2v.json")
+    comfy_image_workflow: str = os.getenv(
+        "COMFYUI_IMAGE_WORKFLOW", "image_z_image_turbo.json"
+    )
     comfy_timeout: float = float(os.getenv("COMFYUI_TIMEOUT", "1800"))
 
 
