@@ -33,6 +33,19 @@ class ComfyUIClient:
         except Exception as exc:
             return False, f"无法连接 ComfyUI：{exc}"
 
+    def release_models(self) -> tuple[bool, str]:
+        """Best-effort release of resident ComfyUI models before Ollama work."""
+        try:
+            response = httpx.post(
+                self._url("free"),
+                json={"unload_models": True, "free_memory": True},
+                timeout=60,
+            )
+            response.raise_for_status()
+            return True, "已请求 ComfyUI 释放驻留模型"
+        except Exception as exc:
+            return False, f"请求 ComfyUI 释放模型失败：{exc}"
+
     def _load_workflow_file(self, workflow_path: str) -> dict[str, Any]:
         path = Path(workflow_path)
         if not path.is_absolute():
@@ -186,7 +199,7 @@ class ComfyUIClient:
         return prompt_id, self.download_output(output, prompt_id)
 
     def prepare_image_workflow(
-        self, prompt: str, *, width: int, height: int
+        self, prompt: str, *, width: int, height: int, seed: int | None = None
     ) -> dict[str, Any]:
         workflow = copy.deepcopy(
             self._load_workflow_file(self.settings.comfy_image_workflow)
@@ -198,17 +211,25 @@ class ComfyUIClient:
         workflow["57:27"]["inputs"]["text"] = prompt
         workflow["57:13"]["inputs"]["width"] = width
         workflow["57:13"]["inputs"]["height"] = height
-        workflow["57:3"]["inputs"]["seed"] = int.from_bytes(
-            uuid.uuid4().bytes[:8], "big"
-        ) & ((1 << 63) - 1)
+        workflow["57:3"]["inputs"]["seed"] = (
+            self.new_image_seed() if seed is None else int(seed)
+        )
         return workflow
 
+    @staticmethod
+    def new_image_seed() -> int:
+        # Stay below JavaScript's exact integer limit so Gradio can display and reuse it.
+        return int.from_bytes(uuid.uuid4().bytes[:6], "big")
+
     def generate_image(
-        self, prompt: str, *, width: int, height: int
-    ) -> tuple[str, Path]:
+        self, prompt: str, *, width: int, height: int, seed: int | None = None
+    ) -> tuple[str, Path, int]:
+        used_seed = self.new_image_seed() if seed is None else int(seed)
         prompt_id = self.queue(
-            self.prepare_image_workflow(prompt, width=width, height=height)
+            self.prepare_image_workflow(
+                prompt, width=width, height=height, seed=used_seed
+            )
         )
         output = self.wait_for_output(prompt_id, preferred_node="9")
         path = self.download_output(output, prompt_id)
-        return prompt_id, path
+        return prompt_id, path, used_seed
