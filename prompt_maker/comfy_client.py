@@ -92,18 +92,23 @@ class ComfyUIClient:
         result: DirectorResult,
     ) -> dict[str, Any]:
         workflow = copy.deepcopy(self.load_workflow())
-        required = ("395", "398:376", "398:373", "398:378", "398:361", "398:339")
+        # Q6 uses flat node IDs; the original export uses a subgraph prefix.
+        prefix = "" if "376" in workflow else "398:"
+        positive, negative, frames, fps, noise = (
+            f"{prefix}{node_id}" for node_id in ("376", "373", "378", "361", "339")
+        )
+        required = ("395", positive, negative, frames, fps, noise)
         missing = [node_id for node_id in required if node_id not in workflow]
         if missing:
             raise ComfyUIError(f"工作流缺少必要节点：{', '.join(missing)}")
 
         workflow["395"]["inputs"]["image"] = image_name
-        workflow["398:376"]["inputs"]["value"] = self.compose_positive_prompt(result)
-        workflow["398:373"]["inputs"]["text"] = result.negative_prompt_en
-        workflow["398:361"]["inputs"]["value"] = result.parameters.fps
+        workflow[positive]["inputs"]["value"] = self.compose_positive_prompt(result)
+        workflow[negative]["inputs"]["text"] = result.negative_prompt_en
+        workflow[fps]["inputs"]["value"] = result.parameters.fps
         # 直接写入导演计算出的 8n+1 帧数，避免工作流的整数秒换算造成时长偏差。
-        workflow["398:378"]["inputs"]["expression"] = str(result.parameters.num_frames)
-        workflow["398:339"]["inputs"]["noise_seed"] = int.from_bytes(
+        workflow[frames]["inputs"]["expression"] = str(result.parameters.num_frames)
+        workflow[noise]["inputs"]["noise_seed"] = int.from_bytes(
             uuid.uuid4().bytes[:8], "big"
         ) & ((1 << 63) - 1)
         return workflow

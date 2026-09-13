@@ -14,7 +14,7 @@ def _env_bool(name: str, default: bool) -> bool:
 @dataclass(frozen=True)
 class Settings:
     ollama_url: str = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
-    ollama_model: str = os.getenv("OLLAMA_MODEL", "qwen3.8:27b")
+    ollama_model: str = os.getenv("OLLAMA_MODEL", "orcarouter/Qwen3.8-27B-Uncensored:latest")
     request_timeout: float = float(os.getenv("OLLAMA_TIMEOUT", "900"))
     ollama_num_predict: int = int(os.getenv("OLLAMA_NUM_PREDICT", "16384"))
     ollama_structured_retries: int = int(
@@ -26,7 +26,7 @@ class Settings:
     )
     max_questions: int = int(os.getenv("MAX_CLARIFYING_QUESTIONS", "3"))
     comfy_url: str = os.getenv("COMFYUI_URL", "http://127.0.0.1:8000")
-    comfy_workflow: str = os.getenv("COMFYUI_WORKFLOW", "video_ltx2_5_i2v.json")
+    comfy_workflow: str = os.getenv("COMFYUI_WORKFLOW", "video_ltx2_5_i2v_uncensored_Q6_3090.json")
     comfy_image_workflow: str = os.getenv(
         "COMFYUI_IMAGE_WORKFLOW", "image_z_image_turbo.json"
     )

@@ -22,10 +22,10 @@
 
 ## 准备 Ollama
 
-默认模型为 `qwen3.8:27b`，可以通过环境变量更换为其他支持图片的 Ollama 模型。
+默认模型为 `orcarouter/Qwen3.8-27B-Uncensored:latest`，可以通过环境变量更换为其他支持图片的 Ollama 模型。
 
 ```powershell
-ollama pull qwen3.8:27b
+ollama pull orcarouter/Qwen3.8-27B-Uncensored:latest
 ollama serve
 ```
 
@@ -43,7 +43,7 @@ python app.py
 浏览器打开终端中显示的本地地址。也可以设置环境变量：
 
 ```powershell
-$env:OLLAMA_MODEL = "qwen3.8:27b"
+$env:OLLAMA_MODEL = "orcarouter/Qwen3.8-27B-Uncensored:latest"
 $env:OLLAMA_URL = "http://127.0.0.1:11434"
 $env:OLLAMA_TIMEOUT = "900"
 $env:OLLAMA_NUM_PREDICT = "16384"
@@ -59,13 +59,13 @@ Ollama 响应采用流式接收，默认关闭结构化任务的长思考模式�
 ## 连接 ComfyUI
 
 先启动 ComfyUI。本机 Comfy Desktop 的地址为 `http://127.0.0.1:8000`。项目根目录中的
-`video_ltx2_5_i2v.json` 必须是通过 ComfyUI “Export (API Format)” 导出的版本。
+`video_ltx2_5_i2v_uncensored_Q6_3090.json` 必须是通过 ComfyUI “Export (API Format)” 导出的版本。
 
 可通过环境变量修改连接与等待时间：
 
 ```powershell
 $env:COMFYUI_URL = "http://127.0.0.1:8000"
-$env:COMFYUI_WORKFLOW = "video_ltx2_5_i2v.json"
+$env:COMFYUI_WORKFLOW = "video_ltx2_5_i2v_uncensored_Q6_3090.json"
 $env:COMFYUI_IMAGE_WORKFLOW = "image_z_image_turbo.json"
 $env:COMFYUI_TIMEOUT = "1800"
 python app.py
