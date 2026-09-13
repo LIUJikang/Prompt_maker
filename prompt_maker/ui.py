@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 import gradio as gr
@@ -10,6 +11,7 @@ from .comfy_client import ComfyUIClient, ComfyUIError
 from .ollama_client import OllamaError
 from .schemas import DirectorResult, ImageAnalysis
 from .workflow import PromptDirector, legal_frame_count
+from .video_frames import FrameExtractionError, extract_video_frames
 
 
 director = PromptDirector(settings)
@@ -336,9 +338,46 @@ def generate_video(
         raise gr.Error(str(exc)) from exc
     return (
         str(video_path),
+        str(video_path),
         f"生成完成。已使用正向提示词、负向提示词和 {len(result.shots)} 个分镜提示词。"
         f"ComfyUI 任务 ID：`{prompt_id}`",
     )
+
+
+def capture_video_frames(video_path: str | None, count: int, tail_seconds: float):
+    if not video_path:
+        return empty_frame_candidates("请先生成视频。")
+    try:
+        paths = [str(path) for path in extract_video_frames(video_path, int(count), tail_seconds)]
+    except FrameExtractionError as exc:
+        # Extraction failure must not hide a successfully generated video.
+        return empty_frame_candidates(f"视频已保留，截帧未完成：{exc}")
+    return (
+        [(path, Path(path).name) for path in paths],
+        paths,
+        gr.Dropdown(choices=[(Path(path).name, path) for path in paths], value=paths[-1]),
+        f"已保存 {len(paths)} 张原尺寸 PNG：`{Path(paths[0]).parent}`。默认选择最后一帧。",
+        paths,
+    )
+
+
+def empty_frame_candidates(message: str = ""):
+    return [], [], gr.Dropdown(choices=[], value=None), message, []
+
+
+def use_captured_frame(
+    selected: str | None, paths: list[str] | None,
+    duration: float, fps: int, aspect_ratio: str, shot_mode: str, intensity: str,
+):
+    if not selected or selected not in (paths or []) or not Path(selected).is_file():
+        raise gr.Error("请先截取并选择一张有效图片。")
+    values = list(reset_to_initial())
+    values[1] = selected
+    values[3:9] = [
+        duration, fps, aspect_ratio, shot_mode, intensity, frame_preview(duration, fps)
+    ]
+    gr.Info("已设为下一段视频首帧，请填写新动作并重新分析图片。")
+    return tuple(values)
 
 
 def frame_preview(duration: float, fps: int) -> str:
@@ -422,6 +461,7 @@ def reset_to_initial():
         None, None, "", 6, 24, "16:9", "单一连续镜头", "电影感（推荐）",
         frame_preview(6, 24), "", "", "", "", "", "", "", "", None, "",
         gr.Column(visible=True), gr.Column(visible=False), gr.Column(visible=False),
+        None, *empty_frame_candidates(),
     )
 
 
@@ -434,6 +474,8 @@ def build_app() -> gr.Blocks:
         )
         state = gr.State()
         image_state = gr.State()
+        source_video = gr.State()
+        captured_paths = gr.State([])
 
         with gr.Tabs(selected="video_director") as main_tabs:
             with gr.Tab("视频导演", id="video_director"):
@@ -494,6 +536,21 @@ def build_app() -> gr.Blocks:
                     generate_video_button = gr.Button("发送到 ComfyUI 并生成视频", variant="primary")
                     comfy_status = gr.Markdown()
                     comfy_video = gr.Video(label="ComfyUI 生成结果")
+                    gr.Markdown("### 截帧与接续视频\n生成后自动截取；可调整范围再次截取。")
+                    with gr.Row():
+                        capture_count = gr.Slider(1, 12, value=4, step=1, label="截取张数")
+                        capture_tail = gr.Slider(
+                            0, 20, value=1, step=0.1,
+                            label="截取末尾多少秒（0 = 整段均匀截取）",
+                        )
+                    capture_button = gr.Button("重新截取并保存图片")
+                    frame_gallery = gr.Gallery(
+                        label="候选首帧（按时间排列）", columns=4, interactive=False,
+                    )
+                    frame_files = gr.File(label="已保存的 PNG 图片", file_count="multiple")
+                    selected_frame = gr.Dropdown(label="选择下一段首帧", choices=[])
+                    capture_status = gr.Markdown()
+                    use_frame_button = gr.Button("使用选中图片作为下一段首帧", variant="primary")
                     with gr.Row():
                         back_to_questions = gr.Button("返回修改回答")
                         start_over = gr.Button("返回初始界面")
@@ -648,10 +705,24 @@ def build_app() -> gr.Blocks:
         comfy_finished = comfy_started.then(
             generate_video,
             inputs=[state, final_prompt, negative_prompt],
-            outputs=[comfy_video, comfy_status],
+            outputs=[comfy_video, source_video, comfy_status],
             show_progress="hidden",
         )
-        comfy_finished.success(hide_busy, outputs=busy_overlay, show_progress="hidden")
+        frame_outputs = [
+            frame_gallery, frame_files, selected_frame, capture_status, captured_paths,
+        ]
+        captured = comfy_finished.success(
+            capture_video_frames,
+            inputs=[source_video, capture_count, capture_tail],
+            outputs=frame_outputs,
+        )
+        captured.success(hide_busy, outputs=busy_overlay, show_progress="hidden")
+        captured.failure(hide_busy_after_failure, outputs=busy_overlay, show_progress="hidden")
+        capture_button.click(
+            capture_video_frames,
+            inputs=[source_video, capture_count, capture_tail],
+            outputs=frame_outputs,
+        )
         comfy_finished.failure(
             hide_busy_after_failure, outputs=busy_overlay, show_progress="hidden"
         )
@@ -663,9 +734,7 @@ def build_app() -> gr.Blocks:
             show_questions,
             outputs=[question_panel, result_panel],
         )
-        start_over.click(
-            reset_to_initial,
-            outputs=[
+        reset_outputs = [
                 state,
                 image,
                 description,
@@ -688,6 +757,13 @@ def build_app() -> gr.Blocks:
                 setup_panel,
                 question_panel,
                 result_panel,
-            ],
+                source_video,
+                *frame_outputs,
+            ]
+        start_over.click(reset_to_initial, outputs=reset_outputs)
+        use_frame_button.click(
+            use_captured_frame,
+            inputs=[selected_frame, captured_paths, duration, fps, aspect_ratio, shot_mode, intensity],
+            outputs=reset_outputs,
         )
     return demo.queue()
